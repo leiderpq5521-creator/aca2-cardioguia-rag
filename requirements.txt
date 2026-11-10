@@ -1,4 +1,7 @@
 # ACA 2 · Chatbot RAG Salud (HTA) · Qdrant Cloud + LLM + Streamlit
+# PyTorch solo-CPU (mucho más liviano; evita descargar librerías CUDA en Streamlit Cloud)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.4
 streamlit>=1.57
 qdrant-client>=1.12
 sentence-transformers>=3.0

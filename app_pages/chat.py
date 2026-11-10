@@ -1,4 +1,5 @@
 """Página 1 · Chatbot RAG con historial conversacional y fuentes citadas."""
+import html
 import json
 import time
 
@@ -25,61 +26,114 @@ def mostrar_fuentes(meta: dict):
     frags = meta.get("fragmentos", [])
     lat = meta.get("latencia", {})
     citadas = set(meta.get("citas_validas", []))
-    etiqueta = (f"Fuentes · {len(citadas)} citadas de {len(frags)} recuperadas · {lat.get('total_ms', 0)/1000:.1f} s"
-                if not meta.get("sin_evidencia") else f"Sin evidencia suficiente · {len(frags)} fragmentos revisados")
+    etiqueta = (f"Evidencia clínica · {len(citadas)} citadas de {len(frags)} recuperadas · {lat.get('total_ms', 0)/1000:.1f} s"
+                if not meta.get("sin_evidencia") else f"Guarda activada (sin evidencia suficiente) · {len(frags)} fragmentos revisados")
     with st.expander(etiqueta, icon=":material/menu_book:"):
-        if meta.get("modelo"):
-            st.caption(f"Respuesta generada por `{meta['modelo']}`")
-        if meta.get("pregunta_busqueda") and meta["pregunta_busqueda"] != meta.get("pregunta"):
-            st.caption(f"Consulta reformulada con el historial: «{meta['pregunta_busqueda']}»")
-        for f in frags:
-            usado = f["ref"] in citadas
-            with st.container(border=True):
-                st.markdown(f"{':green-badge[citada]' if usado else ':gray-badge[no citada]'} "
-                            f"**[{f['ref']}] {f['origen']}** · similitud `{f['score']:.3f}`")
-                st.caption(f["apa"])
-                st.text(f["texto"])
-        if meta.get("citas_invalidas"):
-            st.warning(f"Citas sin respaldo detectadas: {', '.join(meta['citas_invalidas'])}", icon=":material/warning:")
         with st.container(horizontal=True):
             st.metric("Búsqueda Qdrant", f"{lat.get('busqueda_qdrant_ms', 0)} ms")
             st.metric("Reformulación", f"{lat.get('condensacion_ms', 0)} ms")
             st.metric("Generación LLM", f"{lat.get('llm_ms', 0)} ms")
             st.metric("Tasa de citación", f"{meta.get('tasa_citacion', 0):.0%}")
 
+        if meta.get("modelo"):
+            st.caption(f"Modelo generador: `{meta['modelo']}`")
+        if meta.get("pregunta_busqueda") and meta["pregunta_busqueda"] != meta.get("pregunta"):
+            st.info(f"**Consulta autónoma reformulada con el historial:** «{meta['pregunta_busqueda']}»",
+                    icon=":material/history:")
+        if meta.get("citas_invalidas"):
+            st.warning(f"Citas sin respaldo detectadas: {', '.join(meta['citas_invalidas'])}", icon=":material/warning:")
 
-# ---------------- Encabezado ----------------
-st.header("Chatbot RAG · hipertensión arterial", anchor=False)
-st.caption("Respuestas fundamentadas exclusivamente en las guías indexadas en Qdrant Cloud, con cita de fuente y página.")
+        for f in frags:
+            usado = f["ref"] in citadas
+            clase = "cg-source-card citada" if usado else "cg-source-card"
+            badge = '<span class="cg-badge-ok">✓ Citada en respuesta</span>' if usado else '<span class="cg-badge-neutral">Contexto de apoyo</span>'
+            st.markdown(
+                f"""
+                <div class="{clase}">
+                    <div class="cg-source-header">
+                        <div>{badge} &nbsp; <b>[{html.escape(f['ref'])}] {html.escape(f['origen'])}</b></div>
+                        <div class="cg-badge-neutral">Similitud coseno: <b>{f['score']:.3f}</b></div>
+                    </div>
+                    <div class="cg-apa">📖 {html.escape(f['apa'])}</div>
+                    <div class="cg-frag-text">{html.escape(f['texto'])}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
+
+# ---------------- Encabezado Hero ----------------
 pipe = servicios.pipeline()
 a = servicios.ajustes()
+modelo_activo = getattr(pipe.llm, "modelo", None) or a["modelo"]
+
+servicios.encabezado_pagina(
+    titulo="Chatbot RAG · Hipertensión Arterial y Riesgo Cardiovascular",
+    subtitulo="Respuestas clínicas fundamentadas exclusivamente en las guías indexadas en Qdrant Cloud, con verificación automática de citas y página.",
+    resaltar="RAG",
+    chips=[
+        ("LLM", f"{a['proveedor'].upper()} · {modelo_activo}"),
+        ("Top-k", str(a["top_k"])),
+        ("Umbral", f"{a['umbral']:.2f}"),
+        ("Audiencia", "Todas" if not a["audiencia"] else a["audiencia"].capitalize()),
+    ],
+)
+
 if "error_llm" in st.session_state:
     st.error(st.session_state["error_llm"], title="LLM no disponible", icon=":material/error:")
 
-with st.container(horizontal=True, vertical_alignment="center"):
-    st.badge(f"{a['proveedor']} · {a['modelo']}", icon=":material/smart_toy:", color="blue")
-    st.badge(f"Top-k {a['top_k']} · umbral {a['umbral']:.2f}", icon=":material/manage_search:", color="gray")
-    st.space("stretch")
-    if st.session_state.mensajes:
-        st.download_button("Exportar chat", json.dumps(st.session_state.mensajes, ensure_ascii=False, indent=2),
+prompt_sugerido = None
+if st.session_state.mensajes:
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.caption(f"💬 **{len(st.session_state.mensajes) // 2}** consultas en esta sesión conversacional")
+        st.space("stretch")
+        with st.popover("Consultas de ejemplo", icon=":material/lightbulb:"):
+            for etq, preg in SUGERENCIAS.items():
+                if st.button(etq, key=f"sug_{etq}", width="stretch"):
+                    prompt_sugerido = preg
+        st.download_button("Exportar historial (JSON)",
+                           json.dumps(st.session_state.mensajes, ensure_ascii=False, indent=2),
                            file_name="conversacion_cardioguia.json", icon=":material/download:")
-        if st.button("Nueva conversación", icon=":material/restart_alt:"):
+        if st.button("Nueva conversación", icon=":material/restart_alt:", type="primary"):
             st.session_state.mensajes = []
             st.rerun()
+
+# ---------------- Estado inicial (tarjetas informativas) ----------------
+if not st.session_state.mensajes:
+    st.markdown(
+        """
+        <div class="cg-card-grid">
+            <div class="cg-info-card">
+                <h4>📚 Corpus Oficial Indexado (Qdrant Cloud)</h4>
+                <p>GPC de Hipertensión Arterial Primaria <b>MinSalud Colombia (2025)</b> para profesionales y para pacientes, protocolo <b>HEARTS (OPS/OMS)</b> y casos ilustrativos <b>UCI Heart Disease</b>.</p>
+            </div>
+            <div class="cg-info-card">
+                <h4>🛡️ Mitigación Multicapa de Alucinaciones</h4>
+                <p>Ventana de contexto con chunks vecinos, guarda por umbral coseno (≥ 0.40), temperatura baja (0.2) y bloqueo de inyección de prompt o temas fuera de dominio.</p>
+            </div>
+            <div class="cg-info-card">
+                <h4>📑 Trazabilidad Clínica y Citas APA 7</h4>
+                <p>Cada afirmación incluye su identificador <b>[F#]</b> verificado contra los fragmentos recuperados, indicando documento, página exacta y referencia bibliográfica.</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ---------------- Historial ----------------
 for m in st.session_state.mensajes:
     with st.chat_message(m["role"], avatar=":material/person:" if m["role"] == "user" else ":material/cardiology:"):
-        st.markdown(m["content"])
+        contenido = servicios.embellecer_citas(m["content"]) if m["role"] == "assistant" else m["content"]
+        st.markdown(contenido, unsafe_allow_html=m["role"] == "assistant")
         if m.get("meta"):
             mostrar_fuentes(m["meta"])
 
 # ---------------- Entrada ----------------
-prompt = st.chat_input("Escribe tu pregunta sobre hipertensión arterial…", submit_mode="disable")
+prompt = st.chat_input("Escribe tu pregunta clínica sobre diagnóstico, medición o tratamiento de HTA…",
+                       submit_mode="disable") or prompt_sugerido
 if not st.session_state.mensajes:
     chips = st.empty()
-    elegido = chips.pills("Prueba con:", list(SUGERENCIAS), label_visibility="collapsed")
+    elegido = chips.pills(" Selecciona una consulta clínica de prueba:", list(SUGERENCIAS))
     if elegido:
         prompt = SUGERENCIAS[elegido]
     if prompt:
@@ -93,13 +147,15 @@ if prompt:
 
     with st.chat_message("assistant", avatar=":material/cardiology:"):
         try:
-            with st.status(":shimmer[Buscando evidencia en las guías]", type="compact") as estado:
-                with st.status("Reformulando la consulta con el historial", type="step"):
-                    res, mensajes_llm = pipe.preparar(prompt, historial, k_docs=a["top_k"],
-                                                      k_registros=a["k_registros"], audiencia=a["audiencia"],
-                                                      umbral=a["umbral"])
-                    st.write(res.pregunta_busqueda)
-                with st.status(f"Recuperados {len(res.fragmentos)} fragmentos de Qdrant Cloud", type="step"):
+            with st.status(":shimmer[Buscando evidencia en las guías clínicas…]", type="compact") as estado:
+                res, mensajes_llm = pipe.preparar(prompt, historial, k_docs=a["top_k"],
+                                                  k_registros=a["k_registros"], audiencia=a["audiencia"],
+                                                  umbral=a["umbral"])
+                if res.pregunta_busqueda != prompt:
+                    with st.status("Consulta reformulada con el historial", type="step", state="complete"):
+                        st.write(res.pregunta_busqueda)
+                with st.status(f"Recuperados {len(res.fragmentos)} fragmentos de Qdrant Cloud",
+                               type="step", state="complete"):
                     for f in res.fragmentos:
                         st.caption(f"[{f.ref}] {f.origen} · sim {f.score:.3f}")
                 estado.update(label=f"Evidencia recuperada en {res.latencia['busqueda_qdrant_ms']} ms",
@@ -112,8 +168,10 @@ if prompt:
                 raise RuntimeError(st.session_state.get("error_llm", "LLM no configurado"))
             else:
                 t0 = time.perf_counter()
-                texto = st.write_stream(pipe.llm.stream(SYSTEM_PROMPT, mensajes_llm))
+                contenedor_stream = st.empty()
+                texto = contenedor_stream.write_stream(pipe.llm.stream(SYSTEM_PROMPT, mensajes_llm))
                 res = pipe.finalizar(res, texto, (time.perf_counter() - t0) * 1000)
+                contenedor_stream.markdown(servicios.embellecer_citas(res.respuesta), unsafe_allow_html=True)
 
             meta = {
                 "pregunta": res.pregunta, "pregunta_busqueda": res.pregunta_busqueda,

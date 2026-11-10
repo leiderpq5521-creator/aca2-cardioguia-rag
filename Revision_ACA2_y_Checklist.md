@@ -34,16 +34,16 @@ El ACA 2 cierra el ciclo **end-to-end** del RAG: la base vectorial del ACA 1 se 
 | 20 % | Configuración LLM | Notebook §2 (justificación + tabla de hiperparámetros); `.env.example` | ✅ Hecho (Gemini 3.5 Flash con respaldo Flash-Lite) |
 | 20 % | Interfaz gráfica | `app.py` + `app_pages/`; capturas en `capturas/` | ✅ Hecho |
 | 15 % | Fidelidad | Notebook §3.3–3.5 y §5 (ejecutado: 9/9, 0 citas inventadas); página Evaluación | ✅ Hecho |
-| 15 % | Póster PDF | `Poster_ACA2_RAG_Salud.pdf` | Nombres, enlaces reales (GitHub, video, app) y re-exportar |
+| 15 % | Póster PDF | `Poster_ACA2_RAG_Salud.pdf` | ✅ Nombres, GitHub y Streamlit Cloud puestos; solo falta el enlace de YouTube al grabar |
 | 10 % | Video 3–5 min | `Guion_Video_ACA2.md` | Grabar siguiendo el guion |
 
 ## 4. Pasos finales para el equipo
 1. ✅ API key de Gemini configurada, notebook ejecutado con salidas y capturas tomadas.
 2. Tener en cuenta la cuota gratuita (~20 solicitudes/día por modelo) antes de la grabación del video.
 3. (Opcional) Agregar `GROQ_API_KEY` como respaldo adicional.
-4. Crear el repositorio en GitHub y subir todo **excepto** `.env` (ya está en `.gitignore`). Verificar en GitHub que el `.env` NO aparece.
-5. (Opcional, suma puntos) Desplegar en Streamlit Community Cloud con los *Secrets*.
-6. ✅ Nombres de integrantes puestos. Falta reemplazar `USUARIO` (GitHub), el enlace del video y el de la app.
+4. ✅ Repositorio creado en GitHub (`https://github.com/leiderpq5521-creator/aca2-cardioguia-rag`) sin incluir `.env`.
+5. ✅ App desplegada en Streamlit Community Cloud (`https://aca2-cardioguia-rag-yjlvrbhuceugehlpvpigt6.streamlit.app`).
+6. ✅ Nombres de integrantes, enlace de GitHub y enlace de la app puestos. Solo falta reemplazar el enlace del video una vez subido.
 7. Grabar el video con el guion y verificar que dure entre 3 y 5 minutos.
 
 ## 5. Seguridad: alerta sobre el ACA 1

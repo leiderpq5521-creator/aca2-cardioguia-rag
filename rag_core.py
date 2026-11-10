@@ -15,16 +15,16 @@ Secciones:
 """
 from __future__ import annotations
 
+import functools
 import os
 import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterator
 
 from dotenv import find_dotenv, load_dotenv
-
-from pathlib import Path
 
 load_dotenv(Path(__file__).with_name(".env"))   # .env junto al código (prioridad)
 load_dotenv(find_dotenv(usecwd=True))           # o el .env del directorio de trabajo (p. ej. Colab)
@@ -35,17 +35,33 @@ load_dotenv(find_dotenv(usecwd=True))           # o el .env del directorio de tr
 # =====================================================================================
 def _secreto(nombre: str, defecto: str = "") -> str:
     """Lee una variable desde el entorno (.env) o, si no existe, desde st.secrets (Streamlit Cloud)."""
-    valor = os.getenv(nombre)
+    valor = (os.getenv(nombre) or "").strip()
     if valor:
-        return valor.strip()
+        return valor
     try:  # Streamlit Community Cloud guarda los secretos en st.secrets
         import streamlit as st
 
         if nombre in st.secrets:
-            return str(st.secrets[nombre]).strip()
+            val_st = str(st.secrets[nombre]).strip()
+            if val_st:
+                return val_st
     except Exception:
         pass
     return defecto
+
+
+def _secreto_float(nombre: str, defecto: float) -> float:
+    try:
+        return float(_secreto(nombre, str(defecto)))
+    except ValueError:
+        return defecto
+
+
+def _secreto_int(nombre: str, defecto: int) -> int:
+    try:
+        return int(float(_secreto(nombre, str(defecto))))
+    except ValueError:
+        return defecto
 
 
 MODELOS_POR_DEFECTO = {
@@ -66,12 +82,12 @@ class Config:
     # LLM (ACA 2)
     llm_provider: str = field(default_factory=lambda: _secreto("LLM_PROVIDER", "gemini").lower())
     llm_model: str = field(default_factory=lambda: _secreto("LLM_MODEL", ""))
-    temperature: float = field(default_factory=lambda: float(_secreto("LLM_TEMPERATURE", "0.2")))
-    top_p: float = field(default_factory=lambda: float(_secreto("LLM_TOP_P", "0.9")))
-    max_tokens: int = field(default_factory=lambda: int(_secreto("LLM_MAX_TOKENS", "2048")))
+    temperature: float = field(default_factory=lambda: _secreto_float("LLM_TEMPERATURE", 0.2))
+    top_p: float = field(default_factory=lambda: _secreto_float("LLM_TOP_P", 0.9))
+    max_tokens: int = field(default_factory=lambda: _secreto_int("LLM_MAX_TOKENS", 2048))
     # Recuperación
-    top_k: int = field(default_factory=lambda: int(_secreto("RAG_TOP_K", "5")))
-    umbral_similitud: float = field(default_factory=lambda: float(_secreto("RAG_SCORE_THRESHOLD", "0.40")))
+    top_k: int = field(default_factory=lambda: _secreto_int("RAG_TOP_K", 5))
+    umbral_similitud: float = field(default_factory=lambda: _secreto_float("RAG_SCORE_THRESHOLD", 0.40))
 
     def __post_init__(self):
         if not self.llm_model:
@@ -149,6 +165,10 @@ class Recuperador:
         except Exception:
             self.modelo = SentenceTransformer(cfg.embedding_model)
         self.dim = (getattr(self.modelo, "get_embedding_dimension", None) or self.modelo.get_sentence_embedding_dimension)()
+        self._codificar = functools.lru_cache(maxsize=128)(self._codificar_raw)
+
+    def _codificar_raw(self, consulta: str) -> list[float]:
+        return self.modelo.encode(consulta, normalize_embeddings=True, show_progress_bar=False).tolist()
 
     # ---- verificación del índice -------------------------------------------------
     def estado(self) -> dict:
@@ -184,9 +204,16 @@ class Recuperador:
         from qdrant_client import models
 
         f = models.Filter(must=[models.FieldCondition(key="fuente", match=models.MatchValue(value=fuente))])
-        pts, _ = self.client.scroll(self.cfg.collection, scroll_filter=f, limit=limite,
-                                    with_payload=True, with_vectors=False)
-        filas = [dict(p.payload, id=str(p.id)) for p in pts]
+        filas: list[dict] = []
+        offset = None
+        while len(filas) < limite:
+            pts, offset = self.client.scroll(
+                self.cfg.collection, scroll_filter=f, limit=min(256, limite - len(filas)),
+                offset=offset, with_payload=True, with_vectors=False
+            )
+            filas.extend(dict(p.payload, id=str(p.id)) for p in pts)
+            if offset is None or not pts:
+                break
         return sorted(filas, key=lambda d: (d.get("pagina", 0), d.get("chunk_en_pagina", 0), d.get("id_registro", 0)))
 
     # ---- búsqueda semántica --------------------------------------------------------
@@ -202,7 +229,7 @@ class Recuperador:
 
     def buscar(self, consulta: str, k: int = 5, filtro=None) -> tuple[list[Fragmento], float]:
         """Devuelve los Top-k fragmentos y la latencia de la búsqueda remota (ms)."""
-        qv = self.modelo.encode(consulta, normalize_embeddings=True).tolist()
+        qv = self._codificar(consulta.strip())
         t0 = time.perf_counter()
         res = self.client.query_points(self.cfg.collection, query=qv, limit=k,
                                        query_filter=filtro, with_payload=True)
@@ -218,17 +245,22 @@ class Recuperador:
         docs = [f for f in frags if f.es_documento and "chunk_en_pagina" in f.payload]
         if not docs or vecinos <= 0:
             return frags, 0.0
-        # Los IDs del ACA 1 son deterministas (uuid5 de fuente|página|chunk): se calculan los IDs de los vecinos
-        # y se recuperan en UNA sola llamada, sin necesidad de índices adicionales en la colección.
+        # Se precargan los fragmentos centrales ya obtenidos y se piden a Qdrant únicamente los vecinos faltantes.
+        por_clave = {(f.payload["fuente"], f.payload["pagina"], f.payload["chunk_en_pagina"]): f.texto for f in docs}
         ids = {id_estable({"fuente": f.payload["fuente"], "pagina": f.payload["pagina"], "chunk_en_pagina": c})
                for f in docs
                for c in range(f.payload["chunk_en_pagina"] - vecinos, f.payload["chunk_en_pagina"] + vecinos + 1)
-               if c >= 0}
-        t0 = time.perf_counter()
-        pts = self.client.retrieve(self.cfg.collection, ids=list(ids), with_payload=True, with_vectors=False)
-        ms = (time.perf_counter() - t0) * 1000
-        por_clave = {(p.payload["fuente"], p.payload["pagina"], p.payload["chunk_en_pagina"]): p.payload["texto"]
-                     for p in pts}
+               if c >= 0 and (f.payload["fuente"], f.payload["pagina"], c) not in por_clave}
+        ms = 0.0
+        if ids:
+            t0 = time.perf_counter()
+            try:
+                pts = self.client.retrieve(self.cfg.collection, ids=list(ids), with_payload=True, with_vectors=False)
+                for p in pts:
+                    por_clave[(p.payload["fuente"], p.payload["pagina"], p.payload["chunk_en_pagina"])] = p.payload["texto"]
+            except Exception:
+                return frags, 0.0
+            ms = (time.perf_counter() - t0) * 1000
         cubiertos, salida = set(), []
         for f in frags:
             if not (f.es_documento and "chunk_en_pagina" in f.payload):
@@ -269,9 +301,12 @@ class Recuperador:
 
     def indexar(self, chunks: list[dict], lote: int = 64) -> int:
         """Upsert idempotente (mismo esquema de IDs uuid5 y payload que el ACA 1)."""
+        if not chunks:
+            return 0
         from qdrant_client import models
 
-        vectores = self.modelo.encode([c["texto"] for c in chunks], batch_size=64, normalize_embeddings=True)
+        vectores = self.modelo.encode([c["texto"] for c in chunks], batch_size=64,
+                                      normalize_embeddings=True, show_progress_bar=False)
         for ini in range(0, len(chunks), lote):
             puntos = [models.PointStruct(id=id_estable(c["payload"]), vector=vectores[j].tolist(),
                                          payload=c["payload"])
@@ -336,7 +371,7 @@ class LLM:
         return cls(cfg.llm_provider, cfg.llm_model, cfg.temperature, cfg.top_p, cfg.max_tokens)
 
     # --- Gemini -----------------------------------------------------------------------
-    def _gemini_args(self, system: str, mensajes: list[dict]):
+    def _gemini_args(self, system: str, mensajes: list[dict], max_tokens: int | None = None):
         from google.genai import types
 
         contenidos = [types.Content(role="user" if m["role"] == "user" else "model",
@@ -349,21 +384,26 @@ class LLM:
         elif self.modelo.startswith("gemini-3"):
             extra["thinking_config"] = types.ThinkingConfig(
                 thinking_level=_secreto("GEMINI_THINKING_LEVEL", "low"))
-        conf = types.GenerateContentConfig(system_instruction=system, temperature=self.temperature,
-                                           top_p=self.top_p, max_output_tokens=self.max_tokens, **extra)
+        conf = types.GenerateContentConfig(
+            system_instruction=system, temperature=self.temperature, top_p=self.top_p,
+            max_output_tokens=max_tokens or self.max_tokens, **extra
+        )
         return dict(model=self.modelo, contents=contenidos, config=conf)
 
     # --- API pública ------------------------------------------------------------------
-    def generar(self, system: str, mensajes: list[dict]) -> str:
-        return "".join(self.stream(system, mensajes))
+    def generar(self, system: str, mensajes: list[dict], max_tokens: int | None = None) -> str:
+        return "".join(self.stream(system, mensajes, max_tokens=max_tokens))
 
-    def stream(self, system: str, mensajes: list[dict], reintentos: int = 3) -> Iterator[str]:
+    def stream(self, system: str, mensajes: list[dict], reintentos: int = 3,
+               max_tokens: int | None = None) -> Iterator[str]:
         if self.proveedor == "gemini":
             intento, vacios = 0, 0
             while True:
                 emitido = False
                 try:
-                    for trozo in self._cliente.models.generate_content_stream(**self._gemini_args(system, mensajes)):
+                    for trozo in self._cliente.models.generate_content_stream(
+                        **self._gemini_args(system, mensajes, max_tokens=max_tokens)
+                    ):
                         if trozo.text:
                             emitido = True
                             yield trozo.text
@@ -380,19 +420,34 @@ class LLM:
                         self.cambios_modelo.append(f"{self.modelo} → {self.respaldo[0]} (cuota agotada)")
                         self.modelo = self.respaldo.pop(0)
                         continue
-                    if ("503" in msg or "UNAVAILABLE" in msg) and intento < reintentos - 1:
+                    if any(k in msg for k in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "DEADLINE_EXCEEDED")) \
+                            and intento < reintentos - 1:
                         intento += 1   # alta demanda momentánea: reintento con espera exponencial
                         time.sleep(2 ** intento)
                         continue
                     raise
         else:
-            resp = self._cliente.chat.completions.create(
-                model=self.modelo, messages=[{"role": "system", "content": system}] + mensajes,
-                temperature=self.temperature, top_p=self.top_p, max_tokens=self.max_tokens, stream=True)
-            for trozo in resp:
-                delta = trozo.choices[0].delta.content if trozo.choices else None
-                if delta:
-                    yield delta
+            intento = 0
+            while True:
+                emitido = False
+                try:
+                    resp = self._cliente.chat.completions.create(
+                        model=self.modelo, messages=[{"role": "system", "content": system}] + mensajes,
+                        temperature=self.temperature, top_p=self.top_p,
+                        max_tokens=max_tokens or self.max_tokens, stream=True)
+                    for trozo in resp:
+                        delta = trozo.choices[0].delta.content if trozo.choices else None
+                        if delta:
+                            emitido = True
+                            yield delta
+                    return
+                except Exception as e:
+                    msg = str(e)
+                    if not emitido and any(k in msg for k in ("429", "503", "rate_limit")) and intento < reintentos - 1:
+                        intento += 1
+                        time.sleep(2 ** intento)
+                        continue
+                    raise
 
 
 # =====================================================================================
@@ -472,11 +527,51 @@ class RespuestaRAG:
     @property
     def tasa_citacion(self) -> float:
         """Proporción de oraciones sustantivas de la respuesta que incluyen al menos una cita [F#]."""
-        cuerpo = self.respuesta.split("⚕️")[0]
-        oraciones = [o for o in re.split(r"(?<=[.!?])\s+|\n+", cuerpo) if len(o.strip()) > 25]
-        if not oraciones:
+        if self.sin_evidencia:
             return 0.0
+        cuerpo = self.respuesta.split("⚕️")[0]
+        oraciones = []
+        for o in re.split(r"(?<=[.!?])\s+|\n+", cuerpo):
+            s = o.strip()
+            if len(s) <= 25 or s.rstrip("*_ ").endswith(":") or s.startswith("#"):
+                continue
+            # Excluye notas de alcance/ausencia parcial (regla R3) que por definición no tienen cita
+            if not re.search(r"\[F\d+", s) and re.search(
+                r"no (se )?(encuentr|especific|detall|dispon|aparec|mencion|incluy)|reformular|consultar a un profesional",
+                s, re.I,
+            ):
+                continue
+            oraciones.append(s)
+        if not oraciones:
+            return 1.0 if self.citas_validas else 0.0
         return sum(bool(re.search(r"\[F\d+", o)) for o in oraciones) / len(oraciones)
+
+
+_PATRON_SEGUIMIENTO = re.compile(
+    r"^\s*[¿¡]?\s*(y\b|pero\b|entonces\b|adem[aá]s\b|tambi[eé]n\b|o\b|qu[eé]\s+pasa\b|en\s+caso\b|si\b|cu[aá]nto\b|c[oó]mo\b|cu[aá]l(es)?\s+son\s+sus\b)"
+    r"|\b(esa|ese|eso|esos|esas|este|esta|estos|estas|dicho|dicha|mismo|misma|anterior|anteriores|all[ií]|ah[ií]|su|sus|le|les)\b",
+    re.I,
+)
+_PATRON_DOMINIO_AUTONOMO = re.compile(r"hipertensi|presi[oó]n\s+arterial|\bhta\b|\bmm\s*hg\b", re.I)
+
+
+def _requiere_condensacion(pregunta: str) -> bool:
+    """Determina si una pregunta depende del historial conversacional (elíptica o con referencias anafóricas)."""
+    q = pregunta.strip()
+    if _PATRON_SEGUIMIENTO.search(q):
+        return True
+    # Si ya menciona explícitamente el tema clínico y tiene suficiente longitud sin anáforas, es autónoma
+    if _PATRON_DOMINIO_AUTONOMO.search(q) and len(q.split()) >= 7:
+        return False
+    # Preguntas cortas sin anáforas que no tienen ningún término médico ni de seguimiento no requieren LLM
+    if not re.search(
+        r"hipertensi|presi[oó]n|arterial|\bhta\b|medicament|f[aá]rmaco|tratamient|dosis|meta|control|medir|toma|"
+        r"riesgo|hearts|gu[ií]a|pacient|adult|mayor|ancian|embaraz|renal|diabet|sal|sodio|ejercicio|alcohol|tabaco|"
+        r"colesterol| tensi[oó]metro|mapa|ampa|mm\s*hg",
+        q, re.I,
+    ):
+        return False
+    return len(q.split()) < 10
 
 
 class PipelineRAG:
@@ -485,14 +580,16 @@ class PipelineRAG:
 
     def condensar(self, pregunta: str, historial: list[dict]) -> str:
         """Memoria conversacional: convierte preguntas de seguimiento en preguntas autónomas para la búsqueda."""
-        if not historial or self.llm is None:
+        if not historial or self.llm is None or not _requiere_condensacion(pregunta):
             return pregunta
         hist = "\n".join(f"{'Usuario' if m['role'] == 'user' else 'Asistente'}: {m['content'][:400]}"
                          for m in historial[-4:])
         try:
-            q = self.llm.generar("Eres un reescritor de consultas.",
-                                 [{"role": "user", "content": PROMPT_CONDENSAR.format(historial=hist,
-                                                                                      pregunta=pregunta)}])
+            q = self.llm.generar(
+                "Eres un reescritor de consultas.",
+                [{"role": "user", "content": PROMPT_CONDENSAR.format(historial=hist, pregunta=pregunta)}],
+                max_tokens=256,
+            )
             q = q.strip().strip('"').splitlines()[0] if q.strip() else pregunta
             return q if 5 < len(q) < 400 else pregunta
         except Exception:
@@ -534,8 +631,9 @@ class PipelineRAG:
         citadas = list(dict.fromkeys(citadas))
         res.citas_validas = [c for c in citadas if c in refs]
         res.citas_invalidas = [c for c in citadas if c not in refs]
-        if res.respuesta.startswith("No encuentro esta información"):
+        if res.respuesta.lower().lstrip("*_ \"'«").startswith("no encuentro esta información"):
             res.sin_evidencia = True
+            res.citas_validas = []
         res.latencia["llm_ms"] = round(t_llm_ms)
         res.latencia["total_ms"] = round(sum(v for k, v in res.latencia.items() if k != "total_ms"))
         return res

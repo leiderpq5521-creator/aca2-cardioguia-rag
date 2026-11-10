@@ -6,18 +6,36 @@ Páginas:   Chatbot RAG · Gestión documental · Explorador vectorial · Evalua
 """
 import streamlit as st
 
-from rag_core import MODELOS_POR_DEFECTO, Config
+import servicios
+from rag_core import MODELOS_POR_DEFECTO, Config, clave_llm
 
 st.set_page_config(page_title="CardioGuía · RAG Salud", page_icon=":material/cardiology:", layout="wide")
+servicios.inyectar_estilos()
 
 cfg = Config()
 
 # ---------------- Barra lateral: estado del sistema + hiperparámetros ----------------
 with st.sidebar:
-    st.title(":material/cardiology: CardioGuía")
-    st.caption("Chatbot RAG sobre guías de hipertensión arterial · MinSalud 2025 · OPS HEARTS")
+    st.markdown(
+        """
+        <div class="cg-sidebar-brand">
+            <h3>🩺 CardioGuía RAG</h3>
+            <p>Consulta clínica sobre Hipertensión Arterial · GPC MinSalud 2025 &amp; OPS HEARTS</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    with st.expander("Configuración del modelo", icon=":material/tune:", expanded=False):
+    prov_actual = st.session_state.get("proveedor") or cfg.llm_provider
+    qdrant_ok = cfg.qdrant_url.startswith("https://") and "TU-CLUSTER" not in cfg.qdrant_url
+    llm_ok = bool(clave_llm(prov_actual)) or prov_actual == "ollama"
+    with st.container(horizontal=True):
+        st.badge("Qdrant Cloud", icon=":material/cloud_done:" if qdrant_ok else ":material/cloud_off:",
+                 color="green" if qdrant_ok else "red")
+        st.badge(f"LLM ({prov_actual})", icon=":material/check_circle:" if llm_ok else ":material/error:",
+                 color="green" if llm_ok else "orange")
+
+    with st.expander("Configuración del modelo", icon=":material/tune:", expanded=True):
         proveedores = ["gemini", "groq", "ollama"]
         if "modelo" not in st.session_state:
             st.session_state.modelo = cfg.llm_model
@@ -44,10 +62,12 @@ with st.sidebar:
         st.selectbox("Audiencia de las guías", [None, "profesionales", "pacientes"], key="audiencia",
                      format_func=lambda v: "Todas" if v is None else v.capitalize())
 
-    with st.expander("Credenciales (.env)", icon=":material/key:"):
+    with st.expander("Credenciales (.env)", icon=":material/key:", expanded=False):
         for k, v in cfg.resumen_seguro().items():
             st.markdown(f"**{k}:** `{v}`")
         st.caption("Las claves se leen de variables de entorno o `st.secrets`; nunca se muestran ni se guardan en el código.")
+
+    st.caption("⚕️ **Aviso clínico:** Herramienta académica de apoyo basada en guías oficiales; no reemplaza el criterio médico.")
 
 pages = [
     st.Page("app_pages/chat.py", title="Chatbot RAG", icon=":material/chat:", default=True),

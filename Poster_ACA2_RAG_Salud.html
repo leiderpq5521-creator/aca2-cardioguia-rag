@@ -6,9 +6,15 @@
 <style>
   @page { size: A3 portrait; margin: 0; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; width: 297mm; height: 420mm; padding: 8mm 11mm; overflow: hidden;
+  html { overflow-y: auto; background: #dce6ec; }
+  body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; width: 297mm; min-height: 420mm; margin: 0 auto; padding: 8mm 11mm;
+         overflow-x: hidden; overflow-y: visible;
          background: #f3f7f9; color: #14232e; -webkit-print-color-adjust: exact; print-color-adjust: exact;
          display: flex; flex-direction: column; gap: 3mm; font-size: 10.2px; line-height: 1.33; }
+  @media print {
+    html { background: #f3f7f9; }
+    body { height: 420mm; overflow: hidden; }
+  }
   a { color: #0f6e8c; text-decoration: none; font-weight: 600; }
   h2 { font-size: 13.5px; color: #0b4f66; text-transform: uppercase; letter-spacing: .8px; margin-bottom: 5px;
        display: flex; align-items: center; gap: 6px; }

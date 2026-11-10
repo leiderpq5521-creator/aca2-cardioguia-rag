@@ -49,9 +49,12 @@ CONVERSACION = [
 ]
 
 
-def ejecutar(pipeline, casos=CASOS, **kw) -> pd.DataFrame:
+def ejecutar(pipeline, casos=CASOS, progreso=None, **kw) -> pd.DataFrame:
     filas = []
-    for c in casos:
+    total = len(casos)
+    for idx, c in enumerate(casos, start=1):
+        if progreso is not None:
+            progreso(idx, total, c)
         try:
             r = pipeline.responder(c["pregunta"], [], condensar=False, **kw)
             rechazo = r.sin_evidencia
@@ -65,29 +68,36 @@ def ejecutar(pipeline, casos=CASOS, **kw) -> pd.DataFrame:
                 "rechazo": rechazo, "citas_validas": len(r.citas_validas), "citas_invalidas": len(r.citas_invalidas),
                 "tasa_citacion": round(r.tasa_citacion, 2) if not rechazo else None,
                 "cobertura_claves": round(cobertura, 2) if cobertura is not None else None,
-                "qdrant_ms": r.latencia.get("busqueda_qdrant_ms"), "llm_ms": r.latencia.get("llm_ms"),
-                "total_ms": r.latencia.get("total_ms"), "OK": ok,
-                "modelo": getattr(pipeline.llm, "modelo", None) if not r.latencia.get("llm_ms") == 0 else "— (guarda)",
+                "qdrant_ms": r.latencia.get("busqueda_qdrant_ms", 0), "llm_ms": r.latencia.get("llm_ms", 0),
+                "total_ms": r.latencia.get("total_ms", 0), "OK": ok,
+                "modelo": getattr(pipeline.llm, "modelo", None) if r.latencia.get("llm_ms") != 0 else "— (guarda)",
                 "respuesta": r.respuesta,
             })
         except Exception as e:  # el error queda registrado sin detener la batería
-            filas.append({"id": c["id"], "categoria": c["categoria"], "pregunta": c["pregunta"],
-                          "esperado": c["esperado"], "OK": False, "respuesta": f"ERROR: {e}"})
+            filas.append({
+                "id": c["id"], "categoria": c["categoria"], "pregunta": c["pregunta"], "esperado": c["esperado"],
+                "top1_sim": 0.0, "rechazo": False, "citas_validas": 0, "citas_invalidas": 0,
+                "tasa_citacion": None, "cobertura_claves": None, "qdrant_ms": 0, "llm_ms": 0, "total_ms": 0,
+                "OK": False, "modelo": "error", "respuesta": f"ERROR: {e}",
+            })
     return pd.DataFrame(filas)
 
 
 def resumen(df: pd.DataFrame) -> dict:
     dom = df[df["esperado"] == "responder"]
     fue = df[df["esperado"] == "rechazar"]
+    tasas = dom["tasa_citacion"].dropna() if "tasa_citacion" in dom else pd.Series(dtype=float)
+    tot_ms = df["total_ms"].dropna() if "total_ms" in df else pd.Series(dtype=float)
+    qdr_ms = df["qdrant_ms"].dropna() if "qdrant_ms" in df else pd.Series(dtype=float)
     out = {
         "casos": len(df),
         "aciertos": int(df["OK"].sum()),
-        "exactitud_comportamiento": round(df["OK"].mean(), 2),
-        "respuestas_con_cita_%": round(100 * (dom["citas_validas"].fillna(0) > 0).mean(), 1),
-        "tasa_citacion_media": round(dom["tasa_citacion"].dropna().mean(), 2) if len(dom) else None,
-        "citas_inventadas": int(df["citas_invalidas"].fillna(0).sum()),
-        "rechazos_correctos_%": round(100 * fue["OK"].mean(), 1) if len(fue) else None,
-        "latencia_media_total_ms": round(df["total_ms"].dropna().mean()),
-        "latencia_media_qdrant_ms": round(df["qdrant_ms"].dropna().mean()),
+        "exactitud_comportamiento": round(df["OK"].mean(), 2) if len(df) else 0.0,
+        "respuestas_con_cita_%": round(100 * (dom["citas_validas"].fillna(0) > 0).mean(), 1) if len(dom) else 0.0,
+        "tasa_citacion_media": round(tasas.mean(), 2) if len(tasas) else 0.0,
+        "citas_inventadas": int(df["citas_invalidas"].fillna(0).sum()) if "citas_invalidas" in df else 0,
+        "rechazos_correctos_%": round(100 * fue["OK"].mean(), 1) if len(fue) else 0.0,
+        "latencia_media_total_ms": round(tot_ms.mean()) if len(tot_ms) else 0,
+        "latencia_media_qdrant_ms": round(qdr_ms.mean()) if len(qdr_ms) else 0,
     }
     return {k: (float(v) if hasattr(v, "item") else v) for k, v in out.items()}

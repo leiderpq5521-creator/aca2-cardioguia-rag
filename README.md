@@ -59,7 +59,7 @@ Usuario ─► Streamlit (app.py) ─► PipelineRAG (rag_core.py)
 **Requisitos:** Python 3.10+ y la colección del ACA 1 ya cargada en Qdrant Cloud.
 
 ```bash
-git clone https://github.com/USUARIO/aca2-cardioguia-rag.git
+git clone https://github.com/leiderpq5521-creator/aca2-cardioguia-rag.git
 cd aca2-cardioguia-rag
 python -m venv .venv
 .venv\Scripts\activate          # Windows  (Linux/Mac: source .venv/bin/activate)

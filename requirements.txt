@@ -1,0 +1,11 @@
+# ACA 2 · Chatbot RAG Salud (HTA) · Qdrant Cloud + LLM + Streamlit
+streamlit>=1.57
+qdrant-client>=1.12
+sentence-transformers>=3.0
+pypdf>=5.0
+langchain-text-splitters>=0.3
+python-dotenv>=1.0
+pandas>=2.2
+# Proveedores LLM (se usa el que se configure en .env)
+google-genai>=1.0        # Google Gemini API (recomendado, capa gratuita)
+openai>=1.50             # Cliente compatible para Groq Cloud y Ollama local

@@ -79,9 +79,9 @@ class Config:
 
     def validar_qdrant(self) -> None:
         if not self.qdrant_url.startswith("https://") or "TU-CLUSTER" in self.qdrant_url:
-            raise ValueError("QDRANT_URL no está configurada (revisa el archivo .env).")
+            raise ValueError("QDRANT_URL no está configurada.")
         if not self.qdrant_api_key or "PEGA_AQUI" in self.qdrant_api_key:
-            raise ValueError("QDRANT_API_KEY no está configurada (revisa el archivo .env).")
+            raise ValueError("QDRANT_API_KEY no está configurada.")
 
     def resumen_seguro(self) -> dict:
         """Datos de configuración aptos para mostrar en pantalla (sin secretos)."""

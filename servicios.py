@@ -7,8 +7,19 @@ from rag_core import LLM, Config, PipelineRAG, Recuperador
 
 
 @st.cache_resource(show_spinner="Conectando con Qdrant Cloud y cargando el modelo de embeddings…")
-def recuperador() -> Recuperador:
+def _recuperador() -> Recuperador:
     return Recuperador(Config())
+
+
+def recuperador() -> Recuperador:
+    """Recuperador compartido; si faltan credenciales muestra un aviso claro en lugar de un error técnico."""
+    try:
+        return _recuperador()
+    except ValueError as e:
+        st.error(f"{e} En Streamlit Cloud agréguelas en *Manage app → Settings → Secrets* "
+                 "(ver `.streamlit/secrets.toml.example`); en local, en el archivo `.env`.",
+                 title="Faltan credenciales de Qdrant", icon=":material/key_off:")
+        st.stop()
 
 
 @st.cache_resource(max_entries=6, show_spinner=False)

@@ -5,6 +5,8 @@ Docente: Dr. Hamilton Rivera Flor · Integrantes: Kevin David Guzmán Payares, L
 
 Chatbot con **RAG (Retrieval-Augmented Generation)** que responde preguntas sobre diagnóstico, medición, tratamiento y control de la hipertensión arterial **citando documento y página** de las guías oficiales. Continúa el **ACA 1**, que construyó la base vectorial en **Qdrant Cloud**.
 
+🌐 **App en línea:** https://aca2-cardioguia-rag-yjlvrbhuceugehlpvpigt6.streamlit.app
+
 🎥 Video de sustentación: _enlace_ · 📄 Póster: `Poster_ACA2_RAG_Salud.pdf` · 📓 Notebook: `ACA2_Computacion_Nube_RAG_Salud.ipynb`
 
 ---
